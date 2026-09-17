@@ -4,6 +4,21 @@ from datetime import datetime
 import uuid
 
 
+def _diagnostic_answer_values(result):
+    values = [result]
+
+    if result == "Yes":
+        values.append("Pass")
+    elif result == "No":
+        values.append("Fail")
+    elif result == "Pass":
+        values.append("Yes")
+    elif result == "Fail":
+        values.append("No")
+
+    return values
+
+
 class BuybackRepository:
     def get_table_columns(self, table_name):
         with get_db_connection() as conn:
@@ -137,6 +152,25 @@ class BuybackRepository:
 
             result = cursor.fetchone()
             return float(result["price_impact_percent"]) if result else 0
+
+    def get_price_percent_from_values(self, question_id, answer_values):
+        with get_db_connection() as conn:
+            cursor = conn.cursor(DictCursor)
+
+            for answer_value in answer_values:
+                cursor.execute("""
+                    SELECT price_impact_percent
+                    FROM `tabBuyback Question Option`
+                    WHERE parent = %s
+                    AND TRIM(LOWER(option_value)) = TRIM(LOWER(%s))
+                    LIMIT 1
+                """, (question_id, answer_value))
+
+                result = cursor.fetchone()
+                if result:
+                    return float(result["price_impact_percent"])
+
+            return 0
 
     # =========================
     # GENERATE NAME
@@ -437,9 +471,9 @@ class BuybackRepository:
             # =========================
             for idx, d in enumerate(payload.get("diagnostics", []), start=1):
 
-                percent = self.get_price_percent(
+                percent = self.get_price_percent_from_values(
                     d["test_code"],
-                    d["result"]
+                    _diagnostic_answer_values(d["result"])
                 )
 
                 cursor.execute("""

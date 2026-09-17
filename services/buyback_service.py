@@ -3,6 +3,21 @@ from repositories.buyback_repository import BuybackRepository
 repo = BuybackRepository()
 
 
+def _diagnostic_answer_values(result):
+    values = [result]
+
+    if result == "Yes":
+        values.append("Pass")
+    elif result == "No":
+        values.append("Fail")
+    elif result == "Pass":
+        values.append("Yes")
+    elif result == "Fail":
+        values.append("No")
+
+    return values
+
+
 # =========================================================
 # API 1: CREATE BASIC ASSESSMENT (RESPONSES ONLY)
 # =========================================================
@@ -80,9 +95,9 @@ def create_full_buyback_service(payload: dict):
 
     for d in payload.get("diagnostics", []):
 
-        percent = repo.get_price_percent(
-            d.get("test_code"),   # MUST be BQB-00005, BQB-00006
-            d.get("result")       # Pass / Fail
+        percent = repo.get_price_percent_from_values(
+            d.get("test_code"),
+            _diagnostic_answer_values(d.get("result"))
         )
 
         diagnostic_percent += percent

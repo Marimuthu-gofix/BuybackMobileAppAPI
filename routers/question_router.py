@@ -15,7 +15,7 @@ from controllers.buyback_controller import (
 )
 
 router = APIRouter(
-    prefix="/api/v2",
+    prefix="/api/v1",
     tags=["Buyback Questions"]
 )
 
