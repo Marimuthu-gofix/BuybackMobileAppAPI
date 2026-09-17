@@ -264,3 +264,65 @@ def create_sell_now_service(payload: dict):
         "status": "Draft",
         "workflow_state": "Draft"
     }
+
+
+def create_appointment_service(payload: dict):
+    assessment = repo.get_assessment_for_sell_now(payload["assessment_name"])
+    if not assessment:
+        return {
+            "success": False,
+            "message": "Assessment not found",
+            "data": []
+        }
+
+    if (assessment.get("customer") or "") != payload["customer_id"]:
+        return {
+            "success": False,
+            "message": "Assessment does not belong to this customer",
+            "data": []
+        }
+
+    price = round(float(payload["price"]), 2)
+
+    order = repo.get_order_by_assessment(payload["assessment_name"])
+    order_created = False
+
+    if order:
+        order_name = order["name"]
+    else:
+        order_name = repo.create_sell_now_order(payload, assessment)
+        order_created = True
+
+    existing = repo.get_appointment_by_order(order_name)
+    if existing:
+        return {
+            "success": True,
+            "message": "Appointment already exists for this order",
+            "appointment_name": existing["name"],
+            "appointment_id": existing["appointment_id"],
+            "order_name": order_name,
+            "assessment_name": assessment["name"],
+            "customer_id": assessment["customer"],
+            "status": existing["status"],
+            "appointment_date": str(existing["appointment_date"]) if existing["appointment_date"] else None,
+            "appointment_slot": existing["appointment_slot"]
+        }
+
+    appointment_name = repo.create_pickup_appointment(payload, assessment, order_name, price)
+
+    return {
+        "success": True,
+        "message": "Appointment created successfully",
+        "appointment_name": appointment_name,
+        "order_name": order_name,
+        "order_created": order_created,
+        "assessment_name": assessment["name"],
+        "customer_id": assessment["customer"],
+        "customer_name": assessment.get("customer_name"),
+        "item_code": assessment.get("item"),
+        "item_name": assessment.get("item_name"),
+        "price": price,
+        "status": "Scheduled",
+        "appointment_date": payload.get("appointment_date"),
+        "appointment_slot": payload.get("appointment_slot")
+    }
