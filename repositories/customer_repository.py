@@ -675,19 +675,38 @@ def get_customer_orders_appointments_repo(customer_id):
         with get_db_connection() as conn:
             with conn.cursor() as cursor:
 
+                # Accept the customer name (CUST-00001), the mobile number,
+                # or the numeric ch_customer_id, and resolve to the name.
+                numeric_id = int(customer_id) if customer_id.isdigit() else -1
+
                 cursor.execute("""
-                    SELECT
-                        name
+                    SELECT name
                     FROM tabCustomer
                     WHERE name = %s
+                       OR mobile_no = %s
+                       OR ch_customer_id = %s
+                    ORDER BY
+                        CASE
+                            WHEN name = %s THEN 0
+                            WHEN mobile_no = %s THEN 1
+                            ELSE 2
+                        END,
+                        IFNULL(disabled, 0) ASC,
+                        modified DESC
                     LIMIT 1
-                """, (customer_id,))
+                """, (customer_id, customer_id, numeric_id, customer_id, customer_id))
 
-                if not cursor.fetchone():
+                found = cursor.fetchone()
+
+                if not found:
                     return {
+                        "customer_id": customer_id,
+                        "customer_found": False,
                         "orders": [],
                         "appointments": []
                     }
+
+                customer_id = found["name"]
 
                 cursor.execute("""
                     SELECT
@@ -766,6 +785,8 @@ def get_customer_orders_appointments_repo(customer_id):
                 appointments = cursor.fetchall()
 
                 return {
+                    "customer_id": customer_id,
+                    "customer_found": True,
                     "orders": orders,
                     "appointments": appointments
                 }

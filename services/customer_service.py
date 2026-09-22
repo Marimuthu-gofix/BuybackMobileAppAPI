@@ -119,11 +119,15 @@ def get_customer_addresses_service(customer_id):
 
 def get_customer_orders_appointments_service(customer_id):
 
+    customer_id = (customer_id or "").strip()
+
     data = get_customer_orders_appointments_repo(customer_id=customer_id)
 
     return {
         "success": True,
-        "customer_id": customer_id,
+        "customer_id": data.get("customer_id", customer_id),
+        "customer_found": data.get("customer_found", True),
+        "message": None if data.get("customer_found", True) else "Customer not found",
         "orders_count": len(data["orders"]),
         "appointments_count": len(data["appointments"]),
         "orders": data["orders"],
