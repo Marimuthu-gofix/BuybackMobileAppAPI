@@ -863,3 +863,69 @@ def validate_gofix_customer_repo(mobile_no):
             status_code=503,
             detail="Database connection failed. Please try again."
         )
+
+
+def get_buyback_customers_repo():
+
+    try:
+        with get_db_connection() as conn:
+            with conn.cursor() as cursor:
+
+                cursor.execute("""
+                    SELECT
+                        c.name AS customer_id,
+                        c.customer_name,
+                        c.mobile_no,
+                        c.email_id,
+                        c.ch_customer_id,
+                        c.ch_membership_id AS membership_id,
+                        IFNULL(c.disabled, 0) AS disabled,
+                        IFNULL(a.assessment_count, 0) AS assessment_count,
+                        IFNULL(o.order_count, 0) AS order_count,
+                        a.latest_assessment,
+                        a.latest_assessment_status,
+                        a.latest_assessment_price,
+                        o.latest_order,
+                        o.latest_order_status,
+                        o.latest_order_price,
+                        GREATEST(
+                            IFNULL(a.last_assessment_at, CAST('1000-01-01' AS DATETIME)),
+                            IFNULL(o.last_order_at, CAST('1000-01-01' AS DATETIME))
+                        ) AS last_activity
+                    FROM tabCustomer c
+                    LEFT JOIN (
+                        SELECT
+                            customer,
+                            COUNT(*) AS assessment_count,
+                            MAX(creation) AS last_assessment_at,
+                            SUBSTRING_INDEX(GROUP_CONCAT(name ORDER BY creation DESC), ',', 1) AS latest_assessment,
+                            SUBSTRING_INDEX(GROUP_CONCAT(IFNULL(status, '') ORDER BY creation DESC), ',', 1) AS latest_assessment_status,
+                            SUBSTRING_INDEX(GROUP_CONCAT(IFNULL(estimated_price, 0) ORDER BY creation DESC), ',', 1) AS latest_assessment_price
+                        FROM `tabBuyback Assessment`
+                        WHERE IFNULL(customer, '') != ''
+                        GROUP BY customer
+                    ) a ON a.customer = c.name
+                    LEFT JOIN (
+                        SELECT
+                            customer,
+                            COUNT(*) AS order_count,
+                            MAX(creation) AS last_order_at,
+                            SUBSTRING_INDEX(GROUP_CONCAT(name ORDER BY creation DESC), ',', 1) AS latest_order,
+                            SUBSTRING_INDEX(GROUP_CONCAT(IFNULL(status, '') ORDER BY creation DESC), ',', 1) AS latest_order_status,
+                            SUBSTRING_INDEX(GROUP_CONCAT(IFNULL(approved_price, 0) ORDER BY creation DESC), ',', 1) AS latest_order_price
+                        FROM `tabBuyback Order`
+                        WHERE IFNULL(customer, '') != ''
+                        GROUP BY customer
+                    ) o ON o.customer = c.name
+                    WHERE a.customer IS NOT NULL
+                       OR o.customer IS NOT NULL
+                    ORDER BY last_activity DESC, c.name
+                """)
+
+                return cursor.fetchall()
+
+    except MySQLError:
+        raise HTTPException(
+            status_code=503,
+            detail="Database connection failed. Please try again."
+        )

@@ -4,6 +4,7 @@ from repositories.customer_repository import (
     delete_customer_address_repo,
     get_customer_by_mobile_repo,
     validate_gofix_customer_repo,
+    get_buyback_customers_repo,
     get_customers_repo,
     get_customer_addresses_repo,
     get_customer_orders_appointments_repo
@@ -194,5 +195,45 @@ def validate_gofix_customer_service(mobile_no):
         "is_valid": True,
         "message": "Valid GoFix customer",
         "mobile_no": mobile_no,
+        "data": data
+    }
+
+
+def _money(value):
+    try:
+        return round(float(value or 0), 2)
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def get_buyback_customers_service():
+
+    rows = get_buyback_customers_repo()
+
+    data = []
+
+    for row in rows:
+        data.append({
+            "customer_id": row.get("customer_id"),
+            "customer_name": row.get("customer_name"),
+            "mobile_no": row.get("mobile_no"),
+            "email_id": row.get("email_id"),
+            "ch_customer_id": row.get("ch_customer_id"),
+            "membership_id": row.get("membership_id"),
+            "disabled": int(row.get("disabled") or 0),
+            "assessment_count": int(row.get("assessment_count") or 0),
+            "order_count": int(row.get("order_count") or 0),
+            "latest_assessment": row.get("latest_assessment"),
+            "latest_assessment_status": row.get("latest_assessment_status") or None,
+            "latest_assessment_price": _money(row.get("latest_assessment_price")),
+            "latest_order": row.get("latest_order"),
+            "latest_order_status": row.get("latest_order_status") or None,
+            "latest_order_price": _money(row.get("latest_order_price")),
+            "last_activity": row.get("last_activity")
+        })
+
+    return {
+        "success": True,
+        "count": len(data),
         "data": data
     }
