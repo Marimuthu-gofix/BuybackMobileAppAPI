@@ -23,8 +23,8 @@ def save_customer_service(payload):
         mobile_no=data.get("mobile_no"),
         email_id=data.get("email_id"),
         disabled=data.get("disabled", 0),
-        addresses=data.get("addresses", []),
-        payment_accounts=data.get("payment_accounts", [])
+        addresses=data.get("addresses"),
+        payment_accounts=data.get("payment_accounts")
     )
 
 

@@ -5,6 +5,125 @@ from pymysql.err import MySQLError
 import uuid
 
 
+def _flag(value):
+    """Coerce None/''/'1'/True into 0 or 1 for NOT NULL tinyint columns."""
+    try:
+        return 1 if int(value or 0) else 0
+    except (TypeError, ValueError):
+        return 0
+
+
+def _insert_customer_address(cursor, customer_id, customer_name, mobile_no, idx, addr, now):
+    address_id = f"{customer_id}-ADDR-{idx}"
+
+    cursor.execute("""
+        INSERT INTO tabAddress (
+            name,
+            address_title,
+            address_type,
+            address_line1,
+            address_line2,
+            city,
+            state,
+            country,
+            pincode,
+            phone,
+            is_primary_address,
+            creation,
+            modified,
+            owner,
+            modified_by,
+            docstatus
+        )
+        VALUES (
+            %s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,
+            %s,%s,
+            'Administrator','Administrator',0
+        )
+    """, (
+        address_id,
+        customer_name,
+        addr.get("address_type") or "Billing",
+        addr.get("address_line1"),
+        addr.get("address_line2"),
+        addr.get("city"),
+        addr.get("state"),
+        addr.get("country") or "India",
+        addr.get("pincode"),
+        mobile_no,
+        _flag(addr.get("is_primary_address")),
+        now,
+        now
+    ))
+
+    # Link the address to the customer the way the ERP does, so that
+    # GetAddressByCustomerId / DeleteAddress / SaveAddress can all see it.
+    cursor.execute("""
+        INSERT INTO `tabDynamic Link` (
+            name,
+            parent,
+            parentfield,
+            parenttype,
+            idx,
+            link_doctype,
+            link_name,
+            link_title,
+            creation,
+            modified,
+            owner,
+            modified_by,
+            docstatus
+        )
+        VALUES (
+            %s,%s,'links','Address',1,'Customer',%s,%s,
+            %s,%s,'Administrator','Administrator',0
+        )
+    """, (
+        uuid.uuid4().hex[:10],
+        address_id,
+        customer_id,
+        customer_name,
+        now,
+        now
+    ))
+
+    return address_id
+
+
+def _delete_customer_addresses(cursor, customer_id):
+    """Remove only the addresses that belong to this customer id (never by name)."""
+    cursor.execute("""
+        SELECT DISTINCT a.name
+        FROM tabAddress a
+        LEFT JOIN `tabDynamic Link` dl
+            ON dl.parent = a.name
+           AND dl.parenttype = 'Address'
+           AND dl.link_doctype = 'Customer'
+        WHERE dl.link_name = %s
+           OR a.name LIKE %s
+    """, (customer_id, f"{customer_id}-ADDR-%"))
+
+    names = [row["name"] for row in cursor.fetchall()]
+
+    if not names:
+        return 0
+
+    placeholders = ", ".join(["%s"] * len(names))
+
+    cursor.execute(f"""
+        DELETE FROM `tabDynamic Link`
+        WHERE parenttype = 'Address'
+          AND parent IN ({placeholders})
+    """, tuple(names))
+
+    cursor.execute(f"""
+        DELETE FROM tabAddress
+        WHERE name IN ({placeholders})
+    """, tuple(names))
+
+    return len(names)
+
+
 def save_customer_repo(
     customer_id=None,
     customer_name=None,
@@ -16,8 +135,11 @@ def save_customer_repo(
 ):
     now = datetime.utcnow()
 
-    addresses = addresses or []
-    payment_accounts = payment_accounts or []
+    customer_id = (customer_id or "").strip() or None
+    customer_name = (customer_name or "").strip()
+    mobile_no = (mobile_no or "").strip()
+    email_id = (email_id or "").strip() or None
+    disabled = _flag(disabled)
 
     try:
         with get_db_connection() as conn:
@@ -30,10 +152,18 @@ def save_customer_repo(
                         SELECT name FROM tabCustomer
                         WHERE name=%s LIMIT 1
                     """, (customer_id,))
-                    if cursor.fetchone():
-                        is_update = True
 
-                # Duplicate Mobile Check
+                    if not cursor.fetchone():
+                        # Never silently create a different customer when the
+                        # caller asked to update one that does not exist.
+                        raise HTTPException(
+                            status_code=404,
+                            detail=f"Customer {customer_id} not found"
+                        )
+
+                    is_update = True
+
+                # Duplicate mobile check
                 if is_update:
                     cursor.execute("""
                         SELECT name FROM tabCustomer
@@ -48,22 +178,22 @@ def save_customer_repo(
                         LIMIT 1
                     """, (mobile_no,))
 
-                if cursor.fetchone():
+                duplicate = cursor.fetchone()
+                if duplicate:
                     raise HTTPException(
-                        status_code=400,
-                        detail="Mobile number already exists"
+                        status_code=409,
+                        detail=f"Mobile number already exists for customer {duplicate['name']}"
                     )
 
-                # UPDATE
                 if is_update:
-
                     cursor.execute("""
                         UPDATE tabCustomer
                         SET customer_name=%s,
                             mobile_no=%s,
                             email_id=%s,
                             disabled=%s,
-                            modified=%s
+                            modified=%s,
+                            modified_by='Administrator'
                         WHERE name=%s
                     """, (
                         customer_name,
@@ -74,19 +204,17 @@ def save_customer_repo(
                         customer_id
                     ))
 
-                    cursor.execute("""
-                        DELETE FROM `tabCH Customer Payment Account`
-                        WHERE parent=%s
-                    """, (customer_id,))
+                    # Only replace child data that the caller actually sent.
+                    if payment_accounts is not None:
+                        cursor.execute("""
+                            DELETE FROM `tabCH Customer Payment Account`
+                            WHERE parent=%s
+                        """, (customer_id,))
 
-                    cursor.execute("""
-                        DELETE FROM tabAddress
-                        WHERE address_title=%s
-                    """, (customer_name,))
+                    if addresses is not None:
+                        _delete_customer_addresses(cursor, customer_id)
 
-                # CREATE
                 else:
-
                     cursor.execute("""
                         SELECT IFNULL(MAX(ch_customer_id),0)+1 AS next_id
                         FROM tabCustomer
@@ -132,50 +260,15 @@ def save_customer_repo(
                         now
                     ))
 
-                # Addresses
-                for idx, addr in enumerate(addresses, start=1):
-                    cursor.execute("""
-                        INSERT INTO tabAddress (
-                            name,
-                            address_title,
-                            address_type,
-                            address_line1,
-                            address_line2,
-                            city,
-                            state,
-                            country,
-                            pincode,
-                            phone,
-                            is_primary_address,
-                            creation,
-                            modified,
-                            owner,
-                            modified_by,
-                            docstatus
+                address_ids = []
+                for idx, addr in enumerate(addresses or [], start=1):
+                    address_ids.append(
+                        _insert_customer_address(
+                            cursor, customer_id, customer_name, mobile_no, idx, addr, now
                         )
-                        VALUES (
-                            %s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,
-                            %s,%s,
-                            'Administrator','Administrator',0
-                        )
-                    """, (
-                        f"{customer_id}-ADDR-{idx}",
-                        customer_name,
-                        addr.get("address_type"),
-                        addr.get("address_line1"),
-                        addr.get("address_line2"),
-                        addr.get("city"),
-                        addr.get("state"),
-                        addr.get("country"),
-                        addr.get("pincode"),
-                        mobile_no,
-                        addr.get("is_primary_address"),
-                        now,
-                        now
-                    ))
+                    )
 
-                # Payment Accounts
-                for idx, pay in enumerate(payment_accounts, start=1):
+                for idx, pay in enumerate(payment_accounts or [], start=1):
                     cursor.execute("""
                         INSERT INTO `tabCH Customer Payment Account` (
                             name,
@@ -207,12 +300,12 @@ def save_customer_repo(
                             'Administrator','Administrator',0
                         )
                     """, (
-                        str(uuid.uuid4())[:10],
+                        uuid.uuid4().hex[:10],
                         customer_id,
                         idx,
-                        pay.get("account_label"),
+                        pay.get("account_label") or "Account",
                         pay.get("payment_mode"),
-                        pay.get("is_default"),
+                        _flag(pay.get("is_default")),
                         pay.get("bank_name"),
                         pay.get("branch"),
                         pay.get("account_holder_name"),
@@ -228,11 +321,25 @@ def save_customer_repo(
         return {
             "success": True,
             "customer": customer_id,
-            "action": "updated" if is_update else "created"
+            "action": "updated" if is_update else "created",
+            "address_ids": address_ids,
+            "payment_accounts_saved": len(payment_accounts or [])
         }
 
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+    except HTTPException:
+        # Keep 404 / 409 as they are instead of rewrapping them as 500
+        raise
+
+    except MySQLError as e:
+        if getattr(e, "args", [None])[0] in (2003, 2006, 2013, 1045):
+            raise HTTPException(
+                status_code=503,
+                detail="Database connection failed. Please try again."
+            )
+        raise HTTPException(
+            status_code=500,
+            detail="Database error while saving customer"
+        )
 
 
 def _get_customer(cursor, customer_id):
